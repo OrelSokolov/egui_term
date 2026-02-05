@@ -164,8 +164,6 @@ impl<'a> TerminalView<'a> {
                     }
                 },
                 egui::Event::MouseWheel { unit, delta, .. } => {
-                    let terminal_mode =
-                        self.backend.last_content().terminal_mode;
                     if layout.contains_pointer() {
                         input_actions.push(process_mouse_wheel(
                             state,
