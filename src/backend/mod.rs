@@ -302,6 +302,12 @@ impl TerminalBackend {
         self.pty_id
     }
 
+    pub fn scroll_to_bottom(&mut self) {
+        let term = self.term.clone();
+        let mut term = term.lock();
+        term.scroll_display(Scroll::Bottom);
+    }
+
     fn process_link_action(
         &mut self,
         terminal: &Term<EventProxy>,
