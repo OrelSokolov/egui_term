@@ -308,6 +308,12 @@ impl TerminalBackend {
         term.scroll_display(Scroll::Bottom);
     }
 
+    pub fn clear_history(&mut self) {
+        let term = self.term.clone();
+        let mut term = term.lock();
+        term.grid_mut().clear_history();
+    }
+
     fn process_link_action(
         &mut self,
         terminal: &Term<EventProxy>,
