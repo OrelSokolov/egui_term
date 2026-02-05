@@ -144,10 +144,6 @@ impl<'a> TerminalView<'a> {
         layout: &Response,
         state: &mut TerminalViewState,
     ) -> Self {
-        if !layout.has_focus() || !layout.contains_pointer() {
-            return self;
-        }
-
         let modifiers = layout.ctx.input(|i| i.modifiers);
         let events = layout.ctx.input(|i| i.events.clone());
         for event in events {
@@ -158,44 +154,58 @@ impl<'a> TerminalView<'a> {
                 | egui::Event::Key { .. }
                 | egui::Event::Copy
                 | egui::Event::Paste(_) => {
-                    input_actions.push(process_keyboard_event(
-                        event,
-                        self.backend,
-                        &self.bindings_layout,
-                        modifiers,
-                    ))
+                    if layout.has_focus() {
+                        input_actions.push(process_keyboard_event(
+                            event,
+                            self.backend,
+                            &self.bindings_layout,
+                            modifiers,
+                        ))
+                    }
                 },
-                egui::Event::MouseWheel { unit, delta, .. } => input_actions
-                    .push(process_mouse_wheel(
-                        state,
-                        self.font.font_type().size,
-                        unit,
-                        delta,
-                    )),
+                egui::Event::MouseWheel { unit, delta, .. } => {
+                    let terminal_mode =
+                        self.backend.last_content().terminal_mode;
+                    if layout.contains_pointer() {
+                        input_actions.push(process_mouse_wheel(
+                            state,
+                            self.font.font_type().size,
+                            unit,
+                            delta,
+                            self.backend,
+                        ))
+                    }
+                },
                 egui::Event::PointerButton {
                     button,
                     pressed,
                     modifiers,
                     pos,
                     ..
-                } => input_actions.push(process_button_click(
-                    state,
-                    layout,
-                    self.backend,
-                    &self.bindings_layout,
-                    button,
-                    pos,
-                    &modifiers,
-                    pressed,
-                )),
+                } => {
+                    if layout.contains_pointer() {
+                        input_actions.push(process_button_click(
+                            state,
+                            layout,
+                            self.backend,
+                            &self.bindings_layout,
+                            button,
+                            pos,
+                            &modifiers,
+                            pressed,
+                        ))
+                    }
+                },
                 egui::Event::PointerMoved(pos) => {
-                    input_actions = process_mouse_move(
-                        state,
-                        layout,
-                        self.backend,
-                        pos,
-                        &modifiers,
-                    )
+                    if layout.contains_pointer() {
+                        input_actions = process_mouse_move(
+                            state,
+                            layout,
+                            self.backend,
+                            pos,
+                            &modifiers,
+                        )
+                    }
                 },
                 _ => {},
             };
@@ -463,23 +473,53 @@ fn process_mouse_wheel(
     font_size: f32,
     unit: MouseWheelUnit,
     delta: Vec2,
+    backend: &TerminalBackend,
 ) -> InputAction {
-    match unit {
+    let lines = match unit {
         MouseWheelUnit::Line => {
-            let lines = delta.y.signum() * delta.y.abs().ceil();
-            InputAction::BackendCall(BackendCommand::Scroll(lines as i32))
+            (delta.y.signum() * delta.y.abs().ceil()) as i32
         },
         MouseWheelUnit::Point => {
             state.scroll_pixels -= delta.y;
-            let lines = (state.scroll_pixels / font_size).trunc();
+            let lines = (state.scroll_pixels / font_size).trunc() as i32;
             state.scroll_pixels %= font_size;
-            if lines != 0.0 {
-                InputAction::BackendCall(BackendCommand::Scroll(-lines as i32))
-            } else {
-                InputAction::Ignore
-            }
+            lines
         },
-        MouseWheelUnit::Page => InputAction::Ignore,
+        MouseWheelUnit::Page => 0,
+    };
+
+    if lines == 0 {
+        return InputAction::Ignore;
+    }
+
+    let terminal_mode = backend.last_content().terminal_mode;
+
+    if terminal_mode.intersects(crate::backend::TerminalMode::MOUSE_MODE) {
+        let mouse_btn = if lines > 0 {
+            crate::backend::MouseButton::ScrollDown
+        } else {
+            crate::backend::MouseButton::ScrollUp
+        };
+        InputAction::BackendCall(BackendCommand::MouseReport(
+            mouse_btn,
+            egui::Modifiers::NONE,
+            state.current_mouse_position_on_grid,
+            true,
+        ))
+    } else if terminal_mode.contains(
+        crate::backend::TerminalMode::ALT_SCREEN
+            | crate::backend::TerminalMode::ALTERNATE_SCROLL,
+    ) {
+        let line_cmd = if lines > 0 { b'B' } else { b'A' };
+        let mut content = vec![];
+        for _ in 0..lines.abs() {
+            content.push(0x1b);
+            content.push(b'O');
+            content.push(line_cmd);
+        }
+        InputAction::BackendCall(BackendCommand::Write(content))
+    } else {
+        InputAction::BackendCall(BackendCommand::Scroll(lines))
     }
 }
 
