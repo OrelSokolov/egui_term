@@ -222,7 +222,9 @@ impl TerminalBackend {
         match cmd {
             BackendCommand::Write(input) => {
                 self.write(input);
-                term.scroll_display(Scroll::Bottom);
+                if term.grid().display_offset() == 0 {
+                    term.scroll_display(Scroll::Bottom);
+                }
             },
             BackendCommand::Scroll(delta) => {
                 self.scroll(&mut term, delta);
