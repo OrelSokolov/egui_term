@@ -223,7 +223,7 @@ impl TerminalBackend {
         match cmd {
             BackendCommand::Write(input) => {
                 self.write(input);
-                if term.grid().display_offset() == 0 {
+                if term.grid().total_lines() > term.grid().screen_lines() {
                     term.scroll_display(Scroll::Bottom);
                 }
             },
