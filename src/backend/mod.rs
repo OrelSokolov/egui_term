@@ -311,6 +311,12 @@ impl TerminalBackend {
         term.scroll_display(Scroll::Bottom);
     }
 
+    pub fn scroll_to_top(&mut self) {
+        let term = self.term.clone();
+        let mut term = term.lock();
+        term.scroll_display(Scroll::Top);
+    }
+
     pub fn clear_history(&mut self) {
         let term = self.term.clone();
         let mut term = term.lock();
