@@ -33,6 +33,8 @@ pub type SelectionType = AlacrittySelectionType;
 pub enum BackendCommand {
     Write(Vec<u8>),
     Scroll(i32),
+    ScrollPageUp,
+    ScrollPageDown,
     Resize(Size, Size),
     SelectStart(SelectionType, f32, f32),
     SelectUpdate(f32, f32),
@@ -229,6 +231,12 @@ impl TerminalBackend {
             },
             BackendCommand::Scroll(delta) => {
                 self.scroll(&mut term, delta);
+            },
+            BackendCommand::ScrollPageUp => {
+                term.scroll_display(Scroll::PageUp);
+            },
+            BackendCommand::ScrollPageDown => {
+                term.scroll_display(Scroll::PageDown);
             },
             BackendCommand::Resize(layout_size, font_size) => {
                 self.resize(&mut term, layout_size, font_size);
