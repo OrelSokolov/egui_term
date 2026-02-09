@@ -143,6 +143,16 @@ pub struct TerminalBackend {
     size: TerminalSize,
     notifier: Notifier,
     last_content: RenderableContent,
+    _event_loop_thread: Option<std::thread::JoinHandle<()>>,
+    _event_loop_thread_pty: Option<
+        std::thread::JoinHandle<(
+            alacritty_terminal::event_loop::EventLoop<
+                alacritty_terminal::tty::Pty,
+                EventProxy,
+            >,
+            alacritty_terminal::event_loop::State,
+        )>,
+    >,
 }
 
 impl TerminalBackend {
@@ -189,23 +199,30 @@ impl TerminalBackend {
         let notifier = Notifier(pty_event_loop.channel());
         let pty_notifier = Notifier(pty_event_loop.channel());
         let url_regex = RegexSearch::new(r#"(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file://|git://|ssh:|ftp://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>"\s{-}\^⟨⟩`]+"#).unwrap();
-        let _pty_event_loop_thread = pty_event_loop.spawn();
-        let _pty_event_subscription = std::thread::Builder::new()
+        let event_loop_thread = pty_event_loop.spawn();
+        let event_subscription_thread = std::thread::Builder::new()
             .name(format!("pty_event_subscription_{}", id))
-            .spawn(move || loop {
-                if let Ok(event) = event_receiver.recv() {
-                    pty_event_proxy_sender
-                        .send((id, event.clone()))
-                        .unwrap_or_else(|_| {
-                            panic!("pty_event_subscription_{}: sending PtyEvent is failed", id)
-                        });
-                    app_context.clone().request_repaint();
-                    match event {
-                        Event::Exit => break,
-                        Event::PtyWrite(pty) => pty_notifier.notify(pty.into_bytes()),
-                        _ => {}
+            .spawn(move || {
+                eprintln!("pty_event_subscription_{}: started, pty_id={}", id, pty_id);
+                loop {
+                    if let Ok(event) = event_receiver.recv() {
+                        pty_event_proxy_sender
+                            .send((id, event.clone()))
+                            .unwrap_or_else(|_| {
+                                panic!("pty_event_subscription_{}: sending PtyEvent is failed", id)
+                            });
+                        app_context.clone().request_repaint();
+                        match event {
+                            Event::Exit => {
+                                eprintln!("pty_event_subscription_{}: received Exit event", id);
+                                break;
+                            }
+                            Event::PtyWrite(pty) => pty_notifier.notify(pty.into_bytes()),
+                            _ => {}
+                        }
                     }
                 }
+                eprintln!("pty_event_subscription_{}: thread exiting", id);
             })?;
 
         Ok(Self {
@@ -216,6 +233,8 @@ impl TerminalBackend {
             size: terminal_size,
             notifier,
             last_content: initial_content,
+            _event_loop_thread: Some(event_subscription_thread),
+            _event_loop_thread_pty: Some(event_loop_thread),
         })
     }
 
@@ -600,7 +619,10 @@ impl Default for RenderableContent {
 
 impl Drop for TerminalBackend {
     fn drop(&mut self) {
-        let _ = self.notifier.0.send(Msg::Shutdown);
+        eprintln!("TerminalBackend::drop(): killing pid={}", self.pty_id);
+        unsafe {
+            let _ = libc::kill(self.pty_id as i32, libc::SIGKILL);
+        }
     }
 }
 
