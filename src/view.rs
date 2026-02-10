@@ -153,6 +153,7 @@ impl<'a> TerminalView<'a> {
                 egui::Event::Text(_)
                 | egui::Event::Key { .. }
                 | egui::Event::Copy
+                | egui::Event::Cut
                 | egui::Event::Paste(_) => {
                     if layout.has_focus() {
                         input_actions.push(process_keyboard_event(
@@ -384,6 +385,21 @@ fn process_keyboard_event(
             } else {
                 // Hotfix - Send ^C when there's not selection on view.
                 InputAction::BackendCall(BackendCommand::Write([0x3].to_vec()))
+            }
+            #[cfg(any(target_os = "ios", target_os = "macos"))]
+            {
+                let content = backend.selectable_content();
+                InputAction::WriteToClipboard(content)
+            }
+        },
+        egui::Event::Cut => {
+            #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+            if modifiers.contains(Modifiers::COMMAND | Modifiers::SHIFT) {
+                let content = backend.selectable_content();
+                InputAction::WriteToClipboard(content)
+            } else {
+                // Hotfix - Send ^X when there's not selection on view.
+                InputAction::BackendCall(BackendCommand::Write([0x18].to_vec()))
             }
             #[cfg(any(target_os = "ios", target_os = "macos"))]
             {
