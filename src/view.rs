@@ -364,19 +364,28 @@ fn process_keyboard_event(
         egui::Event::Text(text) => {
             process_text_event(&text, modifiers, backend, bindings_layout)
         },
-        egui::Event::Paste(text) => InputAction::BackendCall(
-            #[cfg(not(any(target_os = "ios", target_os = "macos")))]
-            if modifiers.contains(Modifiers::COMMAND | Modifiers::SHIFT) {
-                BackendCommand::Write(text.as_bytes().to_vec())
-            } else {
-                // Hotfix - Send ^V when there's not selection on view.
-                BackendCommand::Write([0x16].to_vec())
-            },
-            #[cfg(any(target_os = "ios", target_os = "macos"))]
-            {
-                BackendCommand::Write(text.as_bytes().to_vec())
-            },
-        ),
+        egui::Event::Paste(text) => {
+            let terminal_mode = backend.last_content().terminal_mode;
+            InputAction::BackendCall(
+                if terminal_mode.contains(TermMode::BRACKETED_PASTE) {
+                    // Bracketed paste mode: wrap text with markers and filter escape sequences
+                    let mut payload = Vec::new();
+                    payload.extend_from_slice(b"\x1b[200~");
+                    // Filter out escape sequences that could terminate the paste early
+                    for byte in text.bytes() {
+                        if byte != 0x1b && byte != 0x03 {
+                            payload.push(byte);
+                        }
+                    }
+                    payload.extend_from_slice(b"\x1b[201~");
+                    BackendCommand::Write(payload)
+                } else {
+                    // Normal mode: replace newlines with carriage returns
+                    let processed = text.replace("\r\n", "\r").replace('\n', "\r");
+                    BackendCommand::Write(processed.into_bytes())
+                },
+            )
+        }
         egui::Event::Copy => {
             #[cfg(not(any(target_os = "ios", target_os = "macos")))]
             if modifiers.contains(Modifiers::COMMAND | Modifiers::SHIFT) {
