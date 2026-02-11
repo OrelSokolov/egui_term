@@ -294,8 +294,15 @@ impl TerminalBackend {
         let content = self.last_content();
         let mut result = String::new();
         if let Some(range) = content.selectable_range {
+            let mut prev_line: Option<i32> = None;
             for indexed in content.grid.display_iter() {
                 if range.contains(indexed.point) {
+                    if let Some(prev) = prev_line {
+                        if indexed.point.line.0 != prev {
+                            result.push('\n');
+                        }
+                    }
+                    prev_line = Some(indexed.point.line.0);
                     result.push(indexed.c);
                 }
             }
