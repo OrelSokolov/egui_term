@@ -8,8 +8,8 @@ use egui::MouseWheelUnit;
 use egui::Shape;
 use egui::Widget;
 use egui::{Align2, Painter, Pos2, Rect, Response, Stroke, Vec2};
-use egui::{CornerRadius, Key};
-use egui::{Id, PointerButton};
+use egui::{Button, Color32, CornerRadius, Key};
+use egui::{Id, PointerButton, TextEdit};
 
 use crate::backend::BackendCommand;
 use crate::backend::TerminalBackend;
@@ -22,11 +22,17 @@ use crate::types::Size;
 
 const EGUI_TERM_WIDGET_ID_PREFIX: &str = "egui_term::instance::";
 
+const SEARCH_HIGHLIGHT_COLOR: Color32 = Color32::from_rgb(255, 165, 0);
+const SEARCH_FOCUSED_HIGHLIGHT_COLOR: Color32 = Color32::from_rgb(255, 140, 0);
+
 #[derive(Debug, Clone)]
 enum InputAction {
     BackendCall(BackendCommand),
     WriteToClipboard(String),
     Ignore,
+    ToggleSearch,
+    SearchNext,
+    SearchPrev,
 }
 
 #[derive(Clone, Default)]
@@ -34,6 +40,8 @@ pub struct TerminalViewState {
     is_dragged: bool,
     scroll_pixels: f32,
     current_mouse_position_on_grid: TerminalGridPoint,
+    search_query: String,
+    search_active: bool,
 }
 
 pub struct TerminalView<'a> {
@@ -48,15 +56,65 @@ pub struct TerminalView<'a> {
 
 impl Widget for TerminalView<'_> {
     fn ui(self, ui: &mut egui::Ui) -> Response {
-        let (layout, painter) =
-            ui.allocate_painter(self.size, egui::Sense::click());
-
         let widget_id = self.widget_id;
         let mut state = ui.memory(|m| {
             m.data
                 .get_temp::<TerminalViewState>(widget_id)
                 .unwrap_or_default()
         });
+
+        let search_panel_height = if state.search_active { 28.0 } else { 0.0 };
+        let terminal_size =
+            Vec2::new(self.size.x, self.size.y - search_panel_height);
+
+        if state.search_active {
+            ui.allocate_ui_with_layout(
+                Vec2::new(self.size.x, search_panel_height),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+
+                    let query_response = ui.add(
+                        TextEdit::singleline(&mut state.search_query)
+                            .desired_width(150.0)
+                            .hint_text("Search..."),
+                    );
+
+                    if query_response.changed() {
+                        self.backend.search_set_query(&state.search_query);
+                    }
+
+                    if ui.add(Button::new("⏶").frame(false)).clicked() {
+                        if let Some(point) = self.backend.search_prev() {
+                            self.backend.scroll_to_point(point);
+                        }
+                    }
+
+                    if ui.add(Button::new("⏷").frame(false)).clicked() {
+                        if let Some(point) = self.backend.search_next() {
+                            self.backend.scroll_to_point(point);
+                        }
+                    }
+
+                    if ui.add(Button::new("Search").frame(false)).clicked() {
+                        self.backend.search_set_query(&state.search_query);
+                    }
+
+                    let content = self.backend.last_content();
+                    if content.search_state.no_match
+                        && !state.search_query.is_empty()
+                    {
+                        ui.label(
+                            egui::RichText::new("No matches")
+                                .color(Color32::RED),
+                        );
+                    }
+                },
+            );
+        }
+
+        let (layout, painter) =
+            ui.allocate_painter(terminal_size, egui::Sense::click());
 
         self.focus(&layout)
             .resize(&layout)
@@ -217,6 +275,27 @@ impl<'a> TerminalView<'a> {
                     InputAction::WriteToClipboard(data) => {
                         layout.ctx.copy_text(data);
                     },
+                    InputAction::ToggleSearch => {
+                        state.search_active = !state.search_active;
+                        self.backend.search_set_active(state.search_active);
+                        if !state.search_active {
+                            state.search_query.clear();
+                        }
+                    },
+                    InputAction::SearchNext => {
+                        if self.backend.search_active() {
+                            if let Some(point) = self.backend.search_next() {
+                                self.backend.scroll_to_point(point);
+                            }
+                        }
+                    },
+                    InputAction::SearchPrev => {
+                        if self.backend.search_active() {
+                            if let Some(point) = self.backend.search_prev() {
+                                self.backend.scroll_to_point(point);
+                            }
+                        }
+                    },
                     InputAction::Ignore => {},
                 }
             }
@@ -267,6 +346,10 @@ impl<'a> TerminalView<'a> {
                     r.contains(&indexed.point)
                         && r.contains(&state.current_mouse_position_on_grid)
                 });
+            let is_search_match = content.search_state.active
+                && content.search_state.point_in_match(indexed.point).is_some();
+            let is_focused_search_match = content.search_state.active
+                && content.search_state.is_focused_match(indexed.point);
 
             let x = layout_min.x + (cell_width * indexed.point.column.0 as f32);
             let line_num =
@@ -298,6 +381,22 @@ impl<'a> TerminalView<'a> {
                     ),
                     CornerRadius::ZERO,
                     bg,
+                )));
+            }
+
+            if is_search_match {
+                let highlight_color = if is_focused_search_match {
+                    SEARCH_FOCUSED_HIGHLIGHT_COLOR
+                } else {
+                    SEARCH_HIGHLIGHT_COLOR
+                };
+                shapes.push(Shape::Rect(RectShape::filled(
+                    Rect::from_min_size(
+                        Pos2::new(x, y),
+                        Vec2::new(cell_width + 1., cell_height + 1.),
+                    ),
+                    CornerRadius::ZERO,
+                    highlight_color,
                 )));
             }
 
@@ -381,11 +480,12 @@ fn process_keyboard_event(
                     BackendCommand::Write(payload)
                 } else {
                     // Normal mode: replace newlines with carriage returns
-                    let processed = text.replace("\r\n", "\r").replace('\n', "\r");
+                    let processed =
+                        text.replace("\r\n", "\r").replace('\n', "\r");
                     BackendCommand::Write(processed.into_bytes())
                 },
             )
-        }
+        },
         egui::Event::Copy => {
             #[cfg(not(any(target_os = "ios", target_os = "macos")))]
             if modifiers.contains(Modifiers::COMMAND | Modifiers::SHIFT) {
@@ -467,6 +567,30 @@ fn process_keyboard_key(
 ) -> InputAction {
     if !pressed {
         return InputAction::Ignore;
+    }
+
+    if modifiers.command && key == Key::F {
+        return InputAction::ToggleSearch;
+    }
+
+    if backend.search_active() {
+        if key == Key::F3 {
+            if modifiers.shift {
+                return InputAction::SearchPrev;
+            } else {
+                return InputAction::SearchNext;
+            }
+        }
+        if key == Key::Enter {
+            if modifiers.shift {
+                return InputAction::SearchPrev;
+            } else {
+                return InputAction::SearchNext;
+            }
+        }
+        if key == Key::Escape {
+            return InputAction::ToggleSearch;
+        }
     }
 
     let terminal_mode = backend.last_content().terminal_mode;

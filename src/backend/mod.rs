@@ -4,7 +4,7 @@ use crate::types::Size;
 use alacritty_terminal::event::{
     Event, EventListener, Notify, OnResize, WindowSize,
 };
-use alacritty_terminal::event_loop::{EventLoop, Msg, Notifier};
+use alacritty_terminal::event_loop::{EventLoop, Notifier};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{
@@ -79,6 +79,106 @@ pub enum LinkAction {
     Clear,
     Hover,
     Open,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SearchState {
+    pub query: String,
+    pub regex: Option<RegexSearch>,
+    pub matches: Vec<Match>,
+    pub current_match_index: usize,
+    pub active: bool,
+    pub no_match: bool,
+}
+
+impl SearchState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_query(&mut self, query: &str) {
+        self.query = query.to_string();
+        if query.is_empty() {
+            self.regex = None;
+            self.matches.clear();
+            self.no_match = false;
+            return;
+        }
+
+        match RegexSearch::new(query) {
+            Ok(regex) => {
+                self.regex = Some(regex);
+            },
+            Err(_) => {
+                self.regex = None;
+                self.matches.clear();
+                self.no_match = true;
+            },
+        }
+    }
+
+    pub fn update_matches(&mut self, term: &Term<EventProxy>) {
+        if let Some(ref mut regex) = self.regex {
+            let viewport_start = Line(-(term.grid().display_offset() as i32));
+            let viewport_end = viewport_start + term.bottommost_line();
+            let mut start =
+                term.line_search_left(Point::new(viewport_start, Column(0)));
+            let mut end =
+                term.line_search_right(Point::new(viewport_end, Column(0)));
+            start.line = start.line.max(viewport_start - 100);
+            end.line = end.line.min(viewport_end + 100);
+
+            self.matches =
+                RegexIter::new(start, end, Direction::Right, term, regex)
+                    .skip_while(|rm| rm.end().line < viewport_start)
+                    .take_while(|rm| rm.start().line <= viewport_end)
+                    .collect();
+
+            self.no_match = self.matches.is_empty();
+            if self.current_match_index >= self.matches.len() {
+                self.current_match_index = 0;
+            }
+        } else {
+            self.matches.clear();
+            self.no_match = !self.query.is_empty();
+        }
+    }
+
+    pub fn next_match(&mut self) -> Option<&Match> {
+        if self.matches.is_empty() {
+            return None;
+        }
+        let m = self.matches.get(self.current_match_index)?;
+        self.current_match_index =
+            (self.current_match_index + 1) % self.matches.len();
+        Some(m)
+    }
+
+    pub fn prev_match(&mut self) -> Option<&Match> {
+        if self.matches.is_empty() {
+            return None;
+        }
+        if self.current_match_index == 0 {
+            self.current_match_index = self.matches.len() - 1;
+        } else {
+            self.current_match_index -= 1;
+        }
+        self.matches.get(self.current_match_index)
+    }
+
+    pub fn current_match(&self) -> Option<&Match> {
+        self.matches.get(self.current_match_index)
+    }
+
+    pub fn point_in_match(&self, point: Point) -> Option<usize> {
+        self.matches.iter().position(|m| m.contains(&point))
+    }
+
+    pub fn is_focused_match(&self, point: Point) -> bool {
+        self.current_match()
+            .map(|m| m.contains(&point))
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -192,6 +292,7 @@ impl TerminalBackend {
             terminal_size,
             cursor: term.grid_mut().cursor_cell().clone(),
             hovered_hyperlink: None,
+            search_state: SearchState::default(),
         };
         let term = Arc::new(FairMutex::new(term));
         let pty_event_loop =
@@ -324,6 +425,11 @@ impl TerminalBackend {
         self.last_content.cursor = cursor.clone();
         self.last_content.terminal_mode = *terminal.mode();
         self.last_content.terminal_size = self.size;
+
+        if self.last_content.search_state.active {
+            self.last_content.search_state.update_matches(&terminal);
+        }
+
         self.last_content()
     }
 
@@ -355,6 +461,67 @@ impl TerminalBackend {
         let term = self.term.clone();
         let mut term = term.lock();
         term.grid_mut().clear_history();
+    }
+
+    pub fn search_set_query(&mut self, query: &str) {
+        self.last_content.search_state.set_query(query);
+        let term = self.term.clone();
+        let term = term.lock();
+        self.last_content.search_state.update_matches(&term);
+    }
+
+    pub fn search_next(&mut self) -> Option<Point> {
+        let term = self.term.clone();
+        let term = term.lock();
+        self.last_content.search_state.update_matches(&term);
+
+        if let Some(m) = self.last_content.search_state.next_match() {
+            let start = *m.start();
+            return Some(start);
+        }
+        None
+    }
+
+    pub fn search_prev(&mut self) -> Option<Point> {
+        let term = self.term.clone();
+        let term = term.lock();
+        self.last_content.search_state.update_matches(&term);
+
+        if let Some(m) = self.last_content.search_state.prev_match() {
+            let start = *m.start();
+            return Some(start);
+        }
+        None
+    }
+
+    pub fn scroll_to_point(&mut self, point: Point) {
+        let term = self.term.clone();
+        let mut term = term.lock();
+        let display_offset = term.grid().display_offset();
+        let viewport_top = -(display_offset as i32);
+        let viewport_bottom = viewport_top + (self.size.num_lines as i32 - 1);
+
+        if point.line.0 < viewport_top {
+            let delta = viewport_top - point.line.0;
+            term.grid_mut().scroll_display(Scroll::Delta(delta as i32));
+        } else if point.line.0 > viewport_bottom {
+            let delta = point.line.0 - viewport_bottom;
+            term.grid_mut()
+                .scroll_display(Scroll::Delta(-(delta as i32)));
+        }
+    }
+
+    pub fn search_active(&self) -> bool {
+        self.last_content.search_state.active
+    }
+
+    pub fn search_set_active(&mut self, active: bool) {
+        self.last_content.search_state.active = active;
+        if !active {
+            self.last_content.search_state.matches.clear();
+            self.last_content.search_state.query.clear();
+            self.last_content.search_state.no_match = false;
+        }
     }
 
     fn process_link_action(
@@ -609,6 +776,7 @@ pub struct RenderableContent {
     pub cursor: Cell,
     pub terminal_mode: TermMode,
     pub terminal_size: TerminalSize,
+    pub search_state: SearchState,
 }
 
 impl Default for RenderableContent {
@@ -620,6 +788,7 @@ impl Default for RenderableContent {
             cursor: Cell::default(),
             terminal_mode: TermMode::empty(),
             terminal_size: TerminalSize::default(),
+            search_state: SearchState::default(),
         }
     }
 }
