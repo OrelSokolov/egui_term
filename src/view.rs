@@ -213,12 +213,13 @@ impl<'a> TerminalView<'a> {
                 | egui::Event::Copy
                 | egui::Event::Cut
                 | egui::Event::Paste(_) => {
-                    if layout.has_focus() {
+                    if self.has_focus {
                         input_actions.push(process_keyboard_event(
                             event,
                             self.backend,
                             &self.bindings_layout,
                             modifiers,
+                            state.search_active,
                         ))
                     }
                 },
@@ -458,7 +459,45 @@ fn process_keyboard_event(
     backend: &TerminalBackend,
     bindings_layout: &BindingsLayout,
     modifiers: Modifiers,
+    search_active: bool,
 ) -> InputAction {
+    if search_active {
+        return match event {
+            egui::Event::Key {
+                key,
+                pressed,
+                modifiers,
+                ..
+            } => {
+                if !pressed {
+                    return InputAction::Ignore;
+                }
+                if key == Key::Escape {
+                    InputAction::ToggleSearch
+                } else if key == Key::F3 {
+                    if modifiers.shift {
+                        InputAction::SearchPrev
+                    } else {
+                        InputAction::SearchNext
+                    }
+                } else if key == Key::Enter
+                    && (modifiers.ctrl || modifiers.command)
+                {
+                    if modifiers.shift {
+                        InputAction::SearchPrev
+                    } else {
+                        InputAction::SearchNext
+                    }
+                } else if modifiers.command && key == Key::F {
+                    InputAction::ToggleSearch
+                } else {
+                    InputAction::Ignore
+                }
+            },
+            _ => InputAction::Ignore,
+        };
+    }
+
     match event {
         egui::Event::Text(text) => {
             process_text_event(&text, modifiers, backend, bindings_layout)
@@ -481,7 +520,7 @@ fn process_keyboard_event(
                 } else {
                     // Normal mode: replace newlines with carriage returns
                     let processed =
-                        text.replace("\r\n", "\r").replace('\n', "\r");
+                        text.replace("\r\n", "\r").replace("\n", "\r");
                     BackendCommand::Write(processed.into_bytes())
                 },
             )
@@ -571,26 +610,6 @@ fn process_keyboard_key(
 
     if modifiers.command && key == Key::F {
         return InputAction::ToggleSearch;
-    }
-
-    if backend.search_active() {
-        if key == Key::F3 {
-            if modifiers.shift {
-                return InputAction::SearchPrev;
-            } else {
-                return InputAction::SearchNext;
-            }
-        }
-        if key == Key::Enter {
-            if modifiers.shift {
-                return InputAction::SearchPrev;
-            } else {
-                return InputAction::SearchNext;
-            }
-        }
-        if key == Key::Escape {
-            return InputAction::ToggleSearch;
-        }
     }
 
     let terminal_mode = backend.last_content().terminal_mode;
