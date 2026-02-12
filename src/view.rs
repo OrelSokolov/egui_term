@@ -42,6 +42,7 @@ pub struct TerminalViewState {
     current_mouse_position_on_grid: TerminalGridPoint,
     search_query: String,
     search_active: bool,
+    search_just_opened: bool,
 }
 
 pub struct TerminalView<'a> {
@@ -79,6 +80,11 @@ impl Widget for TerminalView<'_> {
                             .desired_width(150.0)
                             .hint_text("Search..."),
                     );
+
+                    if state.search_just_opened {
+                        query_response.request_focus();
+                        state.search_just_opened = false;
+                    }
 
                     if query_response.changed() {
                         self.backend.search_set_query(&state.search_query);
@@ -279,7 +285,9 @@ impl<'a> TerminalView<'a> {
                     InputAction::ToggleSearch => {
                         state.search_active = !state.search_active;
                         self.backend.search_set_active(state.search_active);
-                        if !state.search_active {
+                        if state.search_active {
+                            state.search_just_opened = true;
+                        } else {
                             state.search_query.clear();
                         }
                     },
