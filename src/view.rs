@@ -69,6 +69,16 @@ impl Widget for TerminalView<'_> {
             Vec2::new(self.size.x, self.size.y - search_panel_height);
 
         if state.search_active {
+            let search_textedit_id = ui.make_persistent_id(format!(
+                "{}_search_input",
+                EGUI_TERM_WIDGET_ID_PREFIX
+            ));
+
+            if state.search_just_opened {
+                ui.ctx().memory_mut(|m| m.request_focus(search_textedit_id));
+                state.search_just_opened = false;
+            }
+
             ui.allocate_ui_with_layout(
                 Vec2::new(self.size.x, search_panel_height),
                 egui::Layout::left_to_right(egui::Align::Center),
@@ -77,14 +87,10 @@ impl Widget for TerminalView<'_> {
 
                     let query_response = ui.add(
                         TextEdit::singleline(&mut state.search_query)
+                            .id(search_textedit_id)
                             .desired_width(150.0)
                             .hint_text("Search..."),
                     );
-
-                    if state.search_just_opened {
-                        query_response.request_focus();
-                        state.search_just_opened = false;
-                    }
 
                     if query_response.changed() {
                         self.backend.search_set_query(&state.search_query);
@@ -122,7 +128,7 @@ impl Widget for TerminalView<'_> {
         let (layout, painter) =
             ui.allocate_painter(terminal_size, egui::Sense::click());
 
-        self.focus(&layout)
+        self.focus(&layout, state.search_active)
             .resize(&layout)
             .process_input(&layout, &mut state)
             .show(&mut state, &layout, &painter);
@@ -184,8 +190,8 @@ impl<'a> TerminalView<'a> {
         self
     }
 
-    fn focus(self, layout: &Response) -> Self {
-        if self.has_focus {
+    fn focus(self, layout: &Response, search_active: bool) -> Self {
+        if self.has_focus && !search_active {
             layout.request_focus();
         } else {
             layout.surrender_focus();
