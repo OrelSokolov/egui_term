@@ -795,9 +795,14 @@ impl Default for RenderableContent {
 
 impl Drop for TerminalBackend {
     fn drop(&mut self) {
-        eprintln!("TerminalBackend::drop(): killing pid={}", self.pty_id);
+        eprintln!(
+            "TerminalBackend::drop(): killing process group {}",
+            self.pty_id
+        );
         unsafe {
-            let _ = libc::kill(self.pty_id as i32, libc::SIGKILL);
+            let pid = self.pty_id as i32;
+            let _ = libc::kill(-pid, libc::SIGHUP);
+            let _ = libc::kill(-pid, libc::SIGKILL);
         }
     }
 }
