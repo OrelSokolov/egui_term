@@ -1053,6 +1053,7 @@ dependencies = [
  "egui",
  "libc",
  "open",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

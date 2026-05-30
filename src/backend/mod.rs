@@ -795,14 +795,22 @@ impl Default for RenderableContent {
 
 impl Drop for TerminalBackend {
     fn drop(&mut self) {
-        eprintln!(
-            "TerminalBackend::drop(): killing process group {}",
-            self.pty_id
-        );
+        eprintln!("TerminalBackend::drop(): killing pid={}", self.pty_id);
+        #[cfg(unix)]
         unsafe {
             let pid = self.pty_id as i32;
             let _ = libc::kill(-pid, libc::SIGHUP);
             let _ = libc::kill(-pid, libc::SIGKILL);
+        }
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, self.pty_id);
+            if handle != 0 {
+                let _ = TerminateProcess(handle, 1);
+                let _ = CloseHandle(handle);
+            }
         }
     }
 }
