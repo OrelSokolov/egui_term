@@ -807,7 +807,7 @@ impl Drop for TerminalBackend {
             use windows_sys::Win32::Foundation::CloseHandle;
             use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
             let handle = OpenProcess(PROCESS_TERMINATE, 0, self.pty_id);
-            if handle != 0 {
+            if !handle.is_null() {
                 let _ = TerminateProcess(handle, 1);
                 let _ = CloseHandle(handle);
             }
