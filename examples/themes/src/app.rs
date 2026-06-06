@@ -39,7 +39,8 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx();
         if let Ok((_, PtyEvent::Exit)) = self.pty_proxy_receiver.try_recv() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;

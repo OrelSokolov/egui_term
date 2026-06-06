@@ -124,7 +124,8 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx();
         DockArea::new(&mut self.dock_state)
             .show_add_buttons(false)
             .style(Style::from_egui(ctx.style().as_ref()))
