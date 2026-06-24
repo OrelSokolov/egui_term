@@ -413,7 +413,14 @@ impl TerminalBackend {
 
     pub fn sync(&mut self) -> &RenderableContent {
         let term = self.term.clone();
-        let mut terminal = term.lock();
+        let mut terminal = match term.try_lock_unfair() {
+            Some(guard) => guard,
+            // The PTY reader thread currently holds the terminal lock while
+            // processing a batch of output. Block the UI only briefly: paint
+            // the previous frame's content instead of waiting for the lock.
+            None => return &self.last_content,
+        };
+
         let selectable_range = match &terminal.selection {
             Some(s) => s.to_range(&terminal),
             None => None,
