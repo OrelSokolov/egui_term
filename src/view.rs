@@ -241,11 +241,16 @@ impl<'a> TerminalView<'a> {
         let global_bg =
             self.theme.get_color(Color::Named(NamedColor::Background));
 
-        let mut shapes = vec![Shape::Rect(RectShape::filled(
-            Rect::from_min_max(layout_min, layout_max),
-            CornerRadius::ZERO,
-            global_bg,
-        ))];
+        let mut shapes = Vec::new();
+
+        // Only draw the global background when it is not fully transparent.
+        if global_bg.a() > 0 {
+            shapes.push(Shape::Rect(RectShape::filled(
+                Rect::from_min_max(layout_min, layout_max),
+                CornerRadius::ZERO,
+                global_bg,
+            )));
+        }
 
         for indexed in content.grid.display_iter() {
             let flags = indexed.cell.flags;

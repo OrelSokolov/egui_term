@@ -206,13 +206,20 @@ impl TerminalTheme {
 }
 
 fn hex_to_color(hex: &str) -> anyhow::Result<Color32> {
-    if hex.len() != 7 {
+    let is_solid = hex.len() == 7;
+    let is_transparent = hex.len() == 9;
+    if !is_solid && !is_transparent || !hex.starts_with('#') {
         return Err(anyhow::format_err!("input string is in non valid format"));
     }
 
     let r = u8::from_str_radix(&hex[1..3], 16)?;
     let g = u8::from_str_radix(&hex[3..5], 16)?;
     let b = u8::from_str_radix(&hex[5..7], 16)?;
+    let a = if is_transparent {
+        u8::from_str_radix(&hex[7..9], 16)?
+    } else {
+        255
+    };
 
-    Ok(Color32::from_rgb(r, g, b))
+    Ok(Color32::from_rgba_unmultiplied(r, g, b, a))
 }
