@@ -119,19 +119,14 @@ impl SearchState {
 
     pub fn update_matches(&mut self, term: &Term<EventProxy>) {
         if let Some(ref mut regex) = self.regex {
-            let viewport_start = Line(-(term.grid().display_offset() as i32));
-            let viewport_end = viewport_start + term.bottommost_line();
-            let mut start =
-                term.line_search_left(Point::new(viewport_start, Column(0)));
-            let mut end =
-                term.line_search_right(Point::new(viewport_end, Column(0)));
-            start.line = start.line.max(viewport_start - 100);
-            end.line = end.line.min(viewport_end + 100);
+            // Search the entire terminal buffer (scrollback + visible viewport).
+            let start =
+                term.line_search_left(Point::new(term.topmost_line(), Column(0)));
+            let end = term
+                .line_search_right(Point::new(term.bottommost_line(), Column(0)));
 
             self.matches =
                 RegexIter::new(start, end, Direction::Right, term, regex)
-                    .skip_while(|rm| rm.end().line < viewport_start)
-                    .take_while(|rm| rm.start().line <= viewport_end)
                     .collect();
 
             self.no_match = self.matches.is_empty();
@@ -141,6 +136,27 @@ impl SearchState {
         } else {
             self.matches.clear();
             self.no_match = !self.query.is_empty();
+        }
+    }
+
+    /// Set the current match index to the first match that starts at or below
+    /// the top of the visible viewport. This makes search navigation start from
+    /// a sensible position instead of jumping to the oldest scrollback match.
+    pub fn set_index_from_viewport(&mut self, term: &Term<EventProxy>) {
+        if self.matches.is_empty() {
+            self.current_match_index = 0;
+            return;
+        }
+
+        let viewport_start = Line(-(term.grid().display_offset() as i32));
+        if let Some(idx) = self
+            .matches
+            .iter()
+            .position(|m| m.start().line >= viewport_start)
+        {
+            self.current_match_index = idx;
+        } else {
+            self.current_match_index = 0;
         }
     }
 
@@ -475,6 +491,7 @@ impl TerminalBackend {
         let term = self.term.clone();
         let term = term.lock();
         self.last_content.search_state.update_matches(&term);
+        self.last_content.search_state.set_index_from_viewport(&term);
     }
 
     pub fn search_next(&mut self) -> Option<Point> {
@@ -499,6 +516,13 @@ impl TerminalBackend {
             return Some(start);
         }
         None
+    }
+
+    pub fn search_current_match(&self) -> Option<Point> {
+        self.last_content
+            .search_state
+            .current_match()
+            .map(|m| *m.start())
     }
 
     pub fn scroll_to_point(&mut self, point: Point) {
