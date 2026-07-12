@@ -1,5 +1,6 @@
 use crate::TerminalMode;
 use egui::{Key, Modifiers, PointerButton};
+use std::sync::OnceLock;
 
 #[derive(Clone, Hash, Debug, PartialEq, Eq)]
 pub enum BindingAction {
@@ -90,6 +91,11 @@ impl Default for BindingsLayout {
 
 impl BindingsLayout {
     pub fn new() -> Self {
+        static DEFAULT: OnceLock<BindingsLayout> = OnceLock::new();
+        DEFAULT.get_or_init(BindingsLayout::build_default).clone()
+    }
+
+    fn build_default() -> Self {
         let mut layout = Self {
             layout: default_keyboard_bindings(),
         };
