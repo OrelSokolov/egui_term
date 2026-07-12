@@ -147,7 +147,27 @@ impl<'a> TerminalView<'a> {
         state: &mut TerminalViewState,
     ) -> Self {
         let modifiers = layout.ctx.input(|i| i.modifiers);
-        let events = layout.ctx.input(|i| i.events.clone());
+        let has_focus = layout.has_focus();
+        let contains_pointer = layout.contains_pointer();
+
+        let events: Vec<egui::Event> = layout.ctx.input(|i| {
+            i.events
+                .iter()
+                .filter(|e| match e {
+                    egui::Event::Text(_)
+                    | egui::Event::Key { .. }
+                    | egui::Event::Copy
+                    | egui::Event::Cut
+                    | egui::Event::Paste(_) => has_focus,
+                    egui::Event::MouseWheel { .. }
+                    | egui::Event::PointerButton { .. }
+                    | egui::Event::PointerMoved(_) => contains_pointer,
+                    _ => false,
+                })
+                .cloned()
+                .collect()
+        });
+
         for event in events {
             let mut input_actions = vec![];
 
