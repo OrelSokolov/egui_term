@@ -1,7 +1,6 @@
 pub mod settings;
 
 use crate::types::Size;
-use std::collections::HashSet;
 use alacritty_terminal::event::{
     Event, EventListener, Notify, OnResize, WindowSize,
 };
@@ -16,11 +15,12 @@ use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{
     self, cell::Cell, test::TermSize, viewport_to_point, Term, TermMode,
 };
-use alacritty_terminal::{tty, Grid};
+use alacritty_terminal::tty;
 use egui::Modifiers;
 use settings::BackendSettings;
 use std::borrow::Cow;
 use std::cmp::min;
+use std::collections::HashSet;
 use std::io::Result;
 use std::ops::{Index, RangeInclusive};
 use std::sync::mpsc::Sender;
@@ -123,10 +123,12 @@ impl SearchState {
     pub fn update_matches(&mut self, term: &Term<EventProxy>) {
         if let Some(ref mut regex) = self.regex {
             // Search the entire terminal buffer (scrollback + visible viewport).
-            let start =
-                term.line_search_left(Point::new(term.topmost_line(), Column(0)));
-            let end = term
-                .line_search_right(Point::new(term.bottommost_line(), Column(0)));
+            let start = term
+                .line_search_left(Point::new(term.topmost_line(), Column(0)));
+            let end = term.line_search_right(Point::new(
+                term.bottommost_line(),
+                Column(0),
+            ));
 
             self.matches =
                 RegexIter::new(start, end, Direction::Right, term, regex)
@@ -329,7 +331,10 @@ impl TerminalBackend {
         let event_proxy = EventProxy(event_sender);
         let mut term = Term::new(config, &terminal_size, event_proxy.clone());
         let initial_content = RenderableContent {
-            grid: term.grid().clone(),
+            cells: Vec::new(),
+            total_lines: term.grid().total_lines(),
+            display_offset: term.grid().display_offset(),
+            cursor_point: term.grid().cursor.point,
             selectable_range: None,
             terminal_mode: *term.mode(),
             terminal_size,
@@ -350,11 +355,9 @@ impl TerminalBackend {
                 eprintln!("pty_event_subscription_{}: started, pty_id={}", id, pty_id);
                 loop {
                     if let Ok(event) = event_receiver.recv() {
-                        pty_event_proxy_sender
-                            .send((id, event.clone()))
-                            .unwrap_or_else(|_| {
-                                panic!("pty_event_subscription_{}: sending PtyEvent is failed", id)
-                            });
+                        if pty_event_proxy_sender.send((id, event.clone())).is_err() {
+                            break;
+                        }
                         app_context.clone().request_repaint();
                         match event {
                             Event::Exit => {
@@ -439,7 +442,7 @@ impl TerminalBackend {
         let mut result = String::new();
         if let Some(range) = content.selectable_range {
             let mut prev_line: Option<i32> = None;
-            for indexed in content.grid.display_iter() {
+            for indexed in &content.cells {
                 if range.contains(indexed.point) {
                     if let Some(prev) = prev_line {
                         if indexed.point.line.0 != prev {
@@ -447,7 +450,7 @@ impl TerminalBackend {
                         }
                     }
                     prev_line = Some(indexed.point.line.0);
-                    result.push(indexed.c);
+                    result.push(indexed.cell.c);
                 }
             }
         }
@@ -456,7 +459,7 @@ impl TerminalBackend {
 
     pub fn sync(&mut self) -> &RenderableContent {
         let term = self.term.clone();
-        let mut terminal = match term.try_lock_unfair() {
+        let terminal = match term.try_lock_unfair() {
             Some(guard) => guard,
             // The PTY reader thread currently holds the terminal lock while
             // processing a batch of output. Block the UI only briefly: paint
@@ -469,10 +472,24 @@ impl TerminalBackend {
             None => None,
         };
 
-        let cursor = terminal.grid_mut().cursor_cell().clone();
-        self.last_content.grid = terminal.grid().clone();
+        let grid = terminal.grid();
+        let cells: Vec<RenderableCell> = grid
+            .display_iter()
+            .map(|indexed| RenderableCell {
+                point: indexed.point,
+                cell: indexed.cell.clone(),
+            })
+            .collect();
+
+        let cursor_point = grid.cursor.point;
+        let cursor_cell = grid[cursor_point].clone();
+
+        self.last_content.cells = cells;
+        self.last_content.total_lines = grid.total_lines();
+        self.last_content.display_offset = grid.display_offset();
+        self.last_content.cursor_point = cursor_point;
+        self.last_content.cursor = cursor_cell;
         self.last_content.selectable_range = selectable_range;
-        self.last_content.cursor = cursor.clone();
         self.last_content.terminal_mode = *terminal.mode();
         self.last_content.terminal_size = self.size;
 
@@ -518,7 +535,9 @@ impl TerminalBackend {
         let term = self.term.clone();
         let term = term.lock();
         self.last_content.search_state.update_matches(&term);
-        self.last_content.search_state.set_index_from_viewport(&term);
+        self.last_content
+            .search_state
+            .set_index_from_viewport(&term);
     }
 
     pub fn search_next(&mut self) -> Option<Point> {
@@ -591,11 +610,8 @@ impl TerminalBackend {
     ) {
         match link_action {
             LinkAction::Hover => {
-                self.last_content.hovered_hyperlink = regex_match_at(
-                    terminal,
-                    point,
-                    &mut self.url_regex,
-                );
+                self.last_content.hovered_hyperlink =
+                    regex_match_at(terminal, point, &mut self.url_regex);
             },
             LinkAction::Clear => {
                 self.last_content.hovered_hyperlink = None;
@@ -611,8 +627,12 @@ impl TerminalBackend {
             let start = range.start();
             let end = range.end();
 
-            let mut url = String::from(self.last_content.grid.index(*start).c);
-            for indexed in self.last_content.grid.iter_from(*start) {
+            let term = self.term.clone();
+            let terminal = term.lock();
+            let grid = terminal.grid();
+
+            let mut url = String::from(grid.index(*start).c);
+            for indexed in grid.iter_from(*start) {
                 url.push(indexed.c);
                 if indexed.point == *end {
                     break;
@@ -803,8 +823,7 @@ fn regex_match_at(
     point: Point,
     regex: &mut RegexSearch,
 ) -> Option<Match> {
-    visible_regex_match_iter(terminal, regex)
-        .find(|rm| rm.contains(&point))
+    visible_regex_match_iter(terminal, regex).find(|rm| rm.contains(&point))
 }
 
 /// Copied from alacritty/src/display/hint.rs:
@@ -826,8 +845,16 @@ fn visible_regex_match_iter<'a>(
         .take_while(move |rm| rm.start().line <= viewport_end)
 }
 
+pub struct RenderableCell {
+    pub point: Point,
+    pub cell: Cell,
+}
+
 pub struct RenderableContent {
-    pub grid: Grid<Cell>,
+    pub cells: Vec<RenderableCell>,
+    pub total_lines: usize,
+    pub display_offset: usize,
+    pub cursor_point: Point,
     pub hovered_hyperlink: Option<RangeInclusive<Point>>,
     pub selectable_range: Option<SelectionRange>,
     pub cursor: Cell,
@@ -839,7 +866,10 @@ pub struct RenderableContent {
 impl Default for RenderableContent {
     fn default() -> Self {
         Self {
-            grid: Grid::new(0, 0, 0),
+            cells: Vec::new(),
+            total_lines: 0,
+            display_offset: 0,
+            cursor_point: Point::new(Line(0), Column(0)),
             hovered_hyperlink: None,
             selectable_range: None,
             cursor: Cell::default(),
@@ -862,7 +892,9 @@ impl Drop for TerminalBackend {
         #[cfg(windows)]
         unsafe {
             use windows_sys::Win32::Foundation::CloseHandle;
-            use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+            };
             let handle = OpenProcess(PROCESS_TERMINATE, 0, self.pty_id);
             if !handle.is_null() {
                 let _ = TerminateProcess(handle, 1);

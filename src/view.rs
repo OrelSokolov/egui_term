@@ -272,130 +272,133 @@ impl<'a> TerminalView<'a> {
             )));
         }
 
-        for indexed in content.grid.display_iter() {
-            let flags = indexed.cell.flags;
-            let is_wide_char_spacer =
-                flags.contains(cell::Flags::WIDE_CHAR_SPACER);
-            if is_wide_char_spacer {
-                continue;
-            }
+        let is_app_cursor_mode =
+            content.terminal_mode.contains(TermMode::APP_CURSOR);
 
-            let is_app_cursor_mode =
-                content.terminal_mode.contains(TermMode::APP_CURSOR);
-            let is_wide_char = flags.contains(cell::Flags::WIDE_CHAR);
-            let is_inverse = flags.contains(cell::Flags::INVERSE);
-            let is_dim =
-                flags.intersects(cell::Flags::DIM | cell::Flags::DIM_BOLD);
-            let is_selected = content
-                .selectable_range
-                .is_some_and(|r| r.contains(indexed.point));
-            let is_hovered_hyperling =
-                content.hovered_hyperlink.as_ref().is_some_and(|r| {
-                    r.contains(&indexed.point)
-                        && r.contains(&state.current_mouse_position_on_grid)
-                });
-            let is_search_match = content.search_state.active
-                && content.search_state.point_in_match(indexed.point).is_some();
-            let is_focused_search_match = content.search_state.active
-                && content.search_state.is_focused_match(indexed.point);
+        let font_id = self.font.font_type();
+        painter.fonts_mut(|fonts| {
+            for indexed in content.cells.iter() {
+                let flags = indexed.cell.flags;
+                let is_wide_char_spacer =
+                    flags.contains(cell::Flags::WIDE_CHAR_SPACER);
+                if is_wide_char_spacer {
+                    continue;
+                }
 
-            let x = layout_min.x + (cell_width * indexed.point.column.0 as f32);
-            let line_num =
-                indexed.point.line.0 + content.grid.display_offset() as i32;
-            let y = layout_min.y + (cell_height * line_num as f32);
+                let is_wide_char = flags.contains(cell::Flags::WIDE_CHAR);
+                let is_inverse = flags.contains(cell::Flags::INVERSE);
+                let is_dim =
+                    flags.intersects(cell::Flags::DIM | cell::Flags::DIM_BOLD);
+                let is_selected = content
+                    .selectable_range
+                    .is_some_and(|r| r.contains(indexed.point));
+                let is_hovered_hyperling =
+                    content.hovered_hyperlink.as_ref().is_some_and(|r| {
+                        r.contains(&indexed.point)
+                            && r.contains(&state.current_mouse_position_on_grid)
+                    });
+                let is_search_match = content.search_state.active
+                    && content
+                        .search_state
+                        .point_in_match(indexed.point)
+                        .is_some();
+                let is_focused_search_match = content.search_state.active
+                    && content.search_state.is_focused_match(indexed.point);
 
-            let mut fg = self.theme.get_color(indexed.fg);
-            let mut bg = self.theme.get_color(indexed.bg);
-            let cell_width = if is_wide_char {
-                cell_width * 2.0
-            } else {
-                cell_width
-            };
+                let x =
+                    layout_min.x + (cell_width * indexed.point.column.0 as f32);
+                let line_num =
+                    indexed.point.line.0 + content.display_offset as i32;
+                let y = layout_min.y + (cell_height * line_num as f32);
 
-            if is_dim {
-                fg = fg.linear_multiply(0.7);
-            }
-
-            if is_inverse || is_selected {
-                std::mem::swap(&mut fg, &mut bg);
-            }
-
-            if global_bg != bg {
-                shapes.push(Shape::Rect(RectShape::filled(
-                    Rect::from_min_size(
-                        Pos2::new(x, y),
-                        // + 1.0 is to fill grid border
-                        Vec2::new(cell_width + 1., cell_height + 1.),
-                    ),
-                    CornerRadius::ZERO,
-                    bg,
-                )));
-            }
-
-            if is_search_match {
-                let highlight_color = if is_focused_search_match {
-                    SEARCH_FOCUSED_HIGHLIGHT_COLOR
+                let mut fg = self.theme.get_color(indexed.cell.fg);
+                let mut bg = self.theme.get_color(indexed.cell.bg);
+                let this_cell_width = if is_wide_char {
+                    cell_width * 2.0
                 } else {
-                    SEARCH_HIGHLIGHT_COLOR
+                    cell_width
                 };
-                shapes.push(Shape::Rect(RectShape::filled(
-                    Rect::from_min_size(
-                        Pos2::new(x, y),
-                        Vec2::new(cell_width + 1., cell_height + 1.),
-                    ),
-                    CornerRadius::ZERO,
-                    highlight_color,
-                )));
-            }
 
-            // Handle hovered hyperlink underline
-            if is_hovered_hyperling {
-                let underline_height = y + cell_height;
-                shapes.push(Shape::LineSegment {
-                    points: [
-                        Pos2::new(x, underline_height),
-                        Pos2::new(x + cell_width, underline_height),
-                    ],
-                    stroke: Stroke::new(cell_height * 0.15, fg),
-                });
-            }
+                if is_dim {
+                    fg = fg.linear_multiply(0.7);
+                }
 
-            // Handle cursor rendering
-            if content.grid.cursor.point == indexed.point {
-                let cursor_color = self.theme.get_color(content.cursor.fg);
-                shapes.push(Shape::Rect(RectShape::filled(
-                    Rect::from_min_size(
-                        Pos2::new(x, y),
-                        Vec2::new(cell_width, cell_height),
-                    ),
-                    CornerRadius::default(),
-                    cursor_color,
-                )));
-            }
-
-            // Draw text content
-            if indexed.c != ' ' && indexed.c != '\t' {
-                if content.grid.cursor.point == indexed.point
-                    && is_app_cursor_mode
-                {
+                if is_inverse || is_selected {
                     std::mem::swap(&mut fg, &mut bg);
                 }
 
-                shapes.push(painter.fonts_mut(|c| {
-                    Shape::text(
-                        c,
-                        Pos2 {
-                            x: x + (cell_width / 2.0),
-                            y,
-                        },
+                if global_bg != bg {
+                    shapes.push(Shape::Rect(RectShape::filled(
+                        Rect::from_min_size(
+                            Pos2::new(x, y),
+                            // + 1.0 is to fill grid border
+                            Vec2::new(this_cell_width + 1., cell_height + 1.),
+                        ),
+                        CornerRadius::ZERO,
+                        bg,
+                    )));
+                }
+
+                if is_search_match {
+                    let highlight_color = if is_focused_search_match {
+                        SEARCH_FOCUSED_HIGHLIGHT_COLOR
+                    } else {
+                        SEARCH_HIGHLIGHT_COLOR
+                    };
+                    shapes.push(Shape::Rect(RectShape::filled(
+                        Rect::from_min_size(
+                            Pos2::new(x, y),
+                            Vec2::new(this_cell_width + 1., cell_height + 1.),
+                        ),
+                        CornerRadius::ZERO,
+                        highlight_color,
+                    )));
+                }
+
+                // Handle hovered hyperlink underline
+                if is_hovered_hyperling {
+                    let underline_height = y + cell_height;
+                    shapes.push(Shape::LineSegment {
+                        points: [
+                            Pos2::new(x, underline_height),
+                            Pos2::new(x + this_cell_width, underline_height),
+                        ],
+                        stroke: Stroke::new(cell_height * 0.15, fg),
+                    });
+                }
+
+                // Handle cursor rendering
+                if content.cursor_point == indexed.point {
+                    let cursor_color = self.theme.get_color(content.cursor.fg);
+                    shapes.push(Shape::Rect(RectShape::filled(
+                        Rect::from_min_size(
+                            Pos2::new(x, y),
+                            Vec2::new(this_cell_width, cell_height),
+                        ),
+                        CornerRadius::default(),
+                        cursor_color,
+                    )));
+                }
+
+                // Draw text content
+                if indexed.cell.c != ' ' && indexed.cell.c != '\t' {
+                    if content.cursor_point == indexed.point
+                        && is_app_cursor_mode
+                    {
+                        std::mem::swap(&mut fg, &mut bg);
+                    }
+
+                    shapes.push(Shape::text(
+                        fonts,
+                        Pos2::new(x + this_cell_width / 2.0, y),
                         Align2::CENTER_TOP,
-                        indexed.c,
-                        self.font.font_type(),
+                        indexed.cell.c,
+                        font_id.clone(),
                         fg,
-                    )
-                }));
+                    ));
+                }
             }
-        }
+        });
 
         painter.extend(shapes);
     }
@@ -721,7 +724,7 @@ fn process_mouse_move(
         cursor_x,
         cursor_y,
         &terminal_content.terminal_size,
-        terminal_content.grid.display_offset(),
+        terminal_content.display_offset,
     );
 
     let mut actions = vec![];

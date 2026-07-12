@@ -143,7 +143,8 @@ impl TerminalTheme {
         }
         for i in 0..24u8 {
             let value = i * 10 + 8;
-            indexed[(232 + i) as usize] = Color32::from_rgb(value, value, value);
+            indexed[(232 + i) as usize] =
+                Color32::from_rgb(value, value, value);
         }
 
         Self {
@@ -161,9 +162,11 @@ impl TerminalTheme {
     pub fn get_color(&self, c: ansi::Color) -> Color32 {
         match c {
             ansi::Color::Spec(rgb) => Color32::from_rgb(rgb.r, rgb.g, rgb.b),
-            ansi::Color::Indexed(index) => {
-                self.indexed.get(index as usize).copied().unwrap_or(Color32::BLACK)
-            },
+            ansi::Color::Indexed(index) => self
+                .indexed
+                .get(index as usize)
+                .copied()
+                .unwrap_or(Color32::BLACK),
             ansi::Color::Named(nc) => match nc {
                 NamedColor::Foreground => self.foreground,
                 NamedColor::Background => self.background,
