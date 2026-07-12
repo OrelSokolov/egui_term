@@ -591,10 +591,10 @@ impl TerminalBackend {
     ) {
         match link_action {
             LinkAction::Hover => {
-                self.last_content.hovered_hyperlink = self.regex_match_at(
+                self.last_content.hovered_hyperlink = regex_match_at(
                     terminal,
                     point,
-                    &mut self.url_regex.clone(),
+                    &mut self.url_regex,
                 );
             },
             LinkAction::Clear => {
@@ -794,19 +794,17 @@ impl TerminalBackend {
             terminal.grid_mut().scroll_display(scroll);
         }
     }
+}
 
-    /// Based on alacritty/src/display/hint.rs > regex_match_at
-    /// Retrieve the match, if the specified point is inside the content matching the regex.
-    fn regex_match_at(
-        &self,
-        terminal: &Term<EventProxy>,
-        point: Point,
-        regex: &mut RegexSearch,
-    ) -> Option<Match> {
-        let x = visible_regex_match_iter(terminal, regex)
-            .find(|rm| rm.contains(&point));
-        x
-    }
+/// Based on alacritty/src/display/hint.rs > regex_match_at
+/// Retrieve the match, if the specified point is inside the content matching the regex.
+fn regex_match_at(
+    terminal: &Term<EventProxy>,
+    point: Point,
+    regex: &mut RegexSearch,
+) -> Option<Match> {
+    visible_regex_match_iter(terminal, regex)
+        .find(|rm| rm.contains(&point))
 }
 
 /// Copied from alacritty/src/display/hint.rs:
