@@ -1,6 +1,7 @@
 pub mod settings;
 
 use crate::types::Size;
+use std::collections::HashSet;
 use alacritty_terminal::event::{
     Event, EventListener, Notify, OnResize, WindowSize,
 };
@@ -86,6 +87,7 @@ pub struct SearchState {
     pub query: String,
     pub regex: Option<RegexSearch>,
     pub matches: Vec<Match>,
+    pub match_points: HashSet<(i32, usize)>,
     pub current_match_index: usize,
     pub active: bool,
     pub no_match: bool,
@@ -101,6 +103,7 @@ impl SearchState {
         if query.is_empty() {
             self.regex = None;
             self.matches.clear();
+            self.match_points.clear();
             self.no_match = false;
             return;
         }
@@ -129,12 +132,33 @@ impl SearchState {
                 RegexIter::new(start, end, Direction::Right, term, regex)
                     .collect();
 
+            // Build a HashSet of all points covered by matches for O(1) lookup
+            // during rendering (avoids linear scan per cell).
+            let cols = term.columns();
+            self.match_points.clear();
+            for m in &self.matches {
+                let s = m.start();
+                let e = m.end();
+                let mut line = s.line.0;
+                let mut col = s.column.0;
+                self.match_points.insert((line, col));
+                while !(line == e.line.0 && col == e.column.0) {
+                    col += 1;
+                    if col >= cols {
+                        col = 0;
+                        line += 1;
+                    }
+                    self.match_points.insert((line, col));
+                }
+            }
+
             self.no_match = self.matches.is_empty();
             if self.current_match_index >= self.matches.len() {
                 self.current_match_index = 0;
             }
         } else {
             self.matches.clear();
+            self.match_points.clear();
             self.no_match = !self.query.is_empty();
         }
     }
@@ -187,6 +211,9 @@ impl SearchState {
     }
 
     pub fn point_in_match(&self, point: Point) -> Option<usize> {
+        if !self.match_points.contains(&(point.line.0, point.column.0)) {
+            return None;
+        }
         self.matches.iter().position(|m| m.contains(&point))
     }
 
@@ -550,6 +577,7 @@ impl TerminalBackend {
         self.last_content.search_state.active = active;
         if !active {
             self.last_content.search_state.matches.clear();
+            self.last_content.search_state.match_points.clear();
             self.last_content.search_state.query.clear();
             self.last_content.search_state.no_match = false;
         }
