@@ -307,6 +307,11 @@ impl TerminalBackend {
         pty_event_proxy_sender: Sender<(u64, PtyEvent)>,
         settings: BackendSettings,
     ) -> Result<Self> {
+        // Copy out the initial size hints before `settings` is moved into the
+        // PTY config below. `Size` is `Copy`, so a plain read suffices.
+        let initial_layout_size = settings.initial_layout_size;
+        let initial_cell_metrics = settings.initial_cell_metrics;
+
         let pty_config = tty::Options {
             shell: Some(tty::Shell::new(settings.shell, settings.args)),
             working_directory: settings.working_directory,
@@ -314,7 +319,24 @@ impl TerminalBackend {
             ..tty::Options::default()
         };
         let config = term::Config::default();
-        let terminal_size = TerminalSize::default();
+        let terminal_size = match (initial_layout_size, initial_cell_metrics) {
+            (Some(layout), Some(cell)) if cell.width > 0.0 && cell.height > 0.0 => {
+                let lines = (layout.height / cell.height.floor()) as u16;
+                let cols = (layout.width / cell.width.floor()) as u16;
+                if lines > 0 && cols > 0 {
+                    TerminalSize {
+                        layout_size: layout,
+                        cell_width: cell.width as u16,
+                        cell_height: cell.height as u16,
+                        num_lines: lines,
+                        num_cols: cols,
+                    }
+                } else {
+                    TerminalSize::default()
+                }
+            }
+            _ => TerminalSize::default(),
+        };
         let pty = tty::new(&pty_config, terminal_size.into(), id)?;
         #[cfg(not(windows))]
         let pty_id = pty.child().id();
