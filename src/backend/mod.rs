@@ -460,6 +460,54 @@ impl TerminalBackend {
     }
 
     pub fn selectable_content(&self) -> String {
+        let term = self.term.clone();
+        let terminal = match term.try_lock_unfair() {
+            Some(guard) => guard,
+            None => return self.selectable_content_from_cache(),
+        };
+
+        let selectable_range = match &terminal.selection {
+            Some(s) => s.to_range(&terminal),
+            None => return String::new(),
+        };
+
+        let Some(range) = selectable_range else {
+            return String::new();
+        };
+
+        let grid = terminal.grid();
+        let last_column = grid.last_column();
+
+        // GridIterator advances the cursor before yielding each cell, so we
+        // start one position before the selection start to include it.
+        let iter_start = if range.start.column.0 > 0 {
+            Point::new(range.start.line, Column(range.start.column.0 - 1))
+        } else {
+            Point::new(Line(range.start.line.0 - 1), last_column)
+        };
+
+        let mut result = String::new();
+        let mut prev_line: Option<i32> = None;
+
+        for indexed in grid.iter_from(iter_start) {
+            if indexed.point > range.end {
+                break;
+            }
+            if range.contains(indexed.point) {
+                if let Some(prev) = prev_line {
+                    if indexed.point.line.0 != prev {
+                        result.push('\n');
+                    }
+                }
+                prev_line = Some(indexed.point.line.0);
+                result.push(indexed.cell.c);
+            }
+        }
+
+        result
+    }
+
+    fn selectable_content_from_cache(&self) -> String {
         let content = self.last_content();
         let mut result = String::new();
         if let Some(range) = content.selectable_range {
