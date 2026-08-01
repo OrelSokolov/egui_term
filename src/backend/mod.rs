@@ -709,9 +709,16 @@ impl TerminalBackend {
                 }
             }
 
-            open::that(url).unwrap_or_else(|_| {
-                panic!("link opening is failed");
-            })
+            // Run the opener on a background thread: `open::that` spawns a
+            // helper like `xdg-open` and waits for it. Doing that on the UI
+            // thread blocks the entire render loop, and on some Linux setups
+            // `xdg-open` doesn't return until the launched browser exits,
+            // which would freeze YAAA hard on every link click.
+            std::thread::spawn(move || {
+                if let Err(err) = open::that(&url) {
+                    eprintln!("failed to open link {url:?}: {err}");
+                }
+            });
         }
     }
 
