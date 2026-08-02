@@ -687,18 +687,23 @@ impl TerminalBackend {
                 self.last_content.hovered_hyperlink = None;
             },
             LinkAction::Open => {
-                self.open_link();
+                self.open_link(terminal);
             },
         };
     }
 
-    fn open_link(&self) {
+    /// Opens the currently hovered hyperlink.
+    ///
+    /// `terminal` is the already-locked term guard from `process_command`.
+    /// We MUST NOT re-acquire `self.term.lock()` here: `FairMutex` (parking_lot)
+    /// is non-reentrant, so locking it again from the same thread deadlocks
+    /// silently in release builds — which was the cause of YAAA freezing hard
+    /// on every link click.
+    fn open_link(&self, terminal: &Term<EventProxy>) {
         if let Some(range) = &self.last_content.hovered_hyperlink {
             let start = range.start();
             let end = range.end();
 
-            let term = self.term.clone();
-            let terminal = term.lock();
             let grid = terminal.grid();
 
             let mut url = String::from(grid.index(*start).c);
@@ -709,11 +714,11 @@ impl TerminalBackend {
                 }
             }
 
-            // Run the opener on a background thread: `open::that` spawns a
-            // helper like `xdg-open` and waits for it. Doing that on the UI
-            // thread blocks the entire render loop, and on some Linux setups
-            // `xdg-open` doesn't return until the launched browser exits,
-            // which would freeze YAAA hard on every link click.
+            // Drop the URL-building work onto a background thread: `open::that`
+            // spawns a helper like `xdg-open` and waits for it, and on some
+            // Linux setups `xdg-open` doesn't return until the launched
+            // browser exits. Running it on the UI thread would block the
+            // render loop, so do it off-thread.
             std::thread::spawn(move || {
                 if let Err(err) = open::that(&url) {
                     eprintln!("failed to open link {url:?}: {err}");
