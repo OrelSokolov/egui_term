@@ -141,12 +141,22 @@ impl BindingsLayout {
     }
 }
 
+// Backspace key code: cmd.exe hosted under ConPTY expects the BS byte (`\x08`,
+// `^H`) for its cooked line editor to delete a character. The Unix/xterm
+// convention is DEL (`\x7f`, `^?`), which bash/zsh handle correctly but which
+// cmd.exe misinterprets: the line editor desyncs, the visible line gets wiped
+// and the cursor freezes — exactly the Windows backspace bug in YAAA.
+#[cfg(windows)]
+const BACKSPACE: char = '\x08';
+#[cfg(not(windows))]
+const BACKSPACE: char = '\x7f';
+
 fn default_keyboard_bindings() -> Vec<(Binding<InputKind>, BindingAction)> {
     generate_bindings!(
         KeyboardBinding;
         // NONE MODIFIERS
         Enter;     BindingAction::Char('\x0d');
-        Backspace; BindingAction::Char('\x7f');
+        Backspace; BindingAction::Char(BACKSPACE);
         Escape;    BindingAction::Char('\x1b');
         Tab;       BindingAction::Char('\x09');
         Insert;    BindingAction::Esc("\x1b[2~".into());
@@ -241,7 +251,7 @@ fn default_keyboard_bindings() -> Vec<(Binding<InputKind>, BindingAction)> {
         Minus,        Modifiers::CTRL; BindingAction::Char('\x1f');
         // SHIFT
         Enter,      Modifiers::SHIFT; BindingAction::Char('\x0d');
-        Backspace,  Modifiers::SHIFT; BindingAction::Char('\x7f');
+        Backspace,  Modifiers::SHIFT; BindingAction::Char(BACKSPACE);
         Tab,        Modifiers::SHIFT; BindingAction::Esc("\x1b[Z".into());
         End,        Modifiers::SHIFT, +TerminalMode::ALT_SCREEN; BindingAction::Esc("\x1b[1;2F".into());
         Home,       Modifiers::SHIFT, +TerminalMode::ALT_SCREEN; BindingAction::Esc("\x1b[1;2H".into());
@@ -252,7 +262,11 @@ fn default_keyboard_bindings() -> Vec<(Binding<InputKind>, BindingAction)> {
         ArrowLeft,  Modifiers::SHIFT; BindingAction::Esc("\x1b[1;2D".into());
         ArrowRight, Modifiers::SHIFT; BindingAction::Esc("\x1b[1;2C".into());
         // ALT
-        Backspace,  Modifiers::ALT; BindingAction::Esc("\x1b\x7f".into());
+        Backspace,  Modifiers::ALT; BindingAction::Esc({
+            let mut s = String::from("\x1b");
+            s.push(BACKSPACE);
+            s
+        });
         End,        Modifiers::ALT; BindingAction::Esc("\x1b[1;3F".into());
         Home,       Modifiers::ALT; BindingAction::Esc("\x1b[1;3H".into());
         Insert,     Modifiers::ALT; BindingAction::Esc("\x1b[3;2~".into());
