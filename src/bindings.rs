@@ -252,7 +252,15 @@ fn default_keyboard_bindings() -> Vec<(Binding<InputKind>, BindingAction)> {
         ArrowLeft,  Modifiers::SHIFT; BindingAction::Esc("\x1b[1;2D".into());
         ArrowRight, Modifiers::SHIFT; BindingAction::Esc("\x1b[1;2C".into());
         // ALT
-        Backspace,  Modifiers::ALT; BindingAction::Esc("\x1b\x7f".into());
+        // On Windows (ConPTY/cmd.exe) Alt+Backspace needs BS (\x08) — DEL (\x7f)
+        // does not delete a word there. Unix shells handle \x7f fine, so keep
+        // the original sequence elsewhere.
+        Backspace,  Modifiers::ALT; BindingAction::Esc({
+            #[cfg(windows)]
+            { "\x1b\x08" }
+            #[cfg(not(windows))]
+            { "\x1b\x7f" }
+        }.into());
         End,        Modifiers::ALT; BindingAction::Esc("\x1b[1;3F".into());
         Home,       Modifiers::ALT; BindingAction::Esc("\x1b[1;3H".into());
         Insert,     Modifiers::ALT; BindingAction::Esc("\x1b[3;2~".into());
